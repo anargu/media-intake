@@ -74,3 +74,30 @@ func TestLoadRejectsInvalidHTTPAddr(t *testing.T) {
 		t.Errorf("Load() error = %q, want it to identify HTTP_ADDR", err)
 	}
 }
+
+func TestDurationFromEnv(t *testing.T) {
+	t.Run("valid duration", func(t *testing.T) {
+		t.Setenv("TEST_DURATION", "2m30s")
+
+		got, err := durationFromEnv("TEST_DURATION", time.Second)
+		if err != nil {
+			t.Fatalf("durationFromEnv() error = %v", err)
+		}
+		want := 2*time.Minute + 30*time.Second
+		if got != want {
+			t.Errorf("durationFromEnv() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("invalid duration", func(t *testing.T) {
+		t.Setenv("TEST_DURATION", "not-a-duration")
+
+		_, err := durationFromEnv("TEST_DURATION", time.Second)
+		if err == nil {
+			t.Fatal("durationFromEnv() error = nil, want invalid duration error")
+		}
+		if !strings.Contains(err.Error(), "TEST_DURATION") {
+			t.Errorf("durationFromEnv() error = %q, want it to identify TEST_DURATION", err)
+		}
+	})
+}
