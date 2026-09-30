@@ -134,6 +134,10 @@ func TestMainShutsDownOnSignal(t *testing.T) {
 		main()
 		return
 	}
+	testDatabaseURL := os.Getenv("TEST_DATABASE_URL")
+	if testDatabaseURL == "" {
+		t.Skip("set TEST_DATABASE_URL to run the PostgreSQL-backed startup shutdown test")
+	}
 
 	for name, shutdownSignal := range map[string]os.Signal{
 		"SIGINT":  os.Interrupt,
@@ -156,6 +160,7 @@ func testMainShutsDownOnSignal(t *testing.T, shutdownSignal os.Signal) {
 		"GO_WANT_SIGNAL_HELPER=1",
 		"HTTP_ADDR=127.0.0.1:0",
 		"SHUTDOWN_TIMEOUT=1s",
+		"DATABASE_URL="+os.Getenv("TEST_DATABASE_URL"),
 	)
 	stdout, err := command.StdoutPipe()
 	if err != nil {

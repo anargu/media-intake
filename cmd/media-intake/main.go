@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/anargu/media-intake/internal/config"
+	"github.com/anargu/media-intake/internal/database"
 	"github.com/anargu/media-intake/internal/server"
 )
 
@@ -29,6 +30,17 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("configuration failed", "error", err)
+		os.Exit(1)
+	}
+
+	databasePool, err := database.Open(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("database connection failed", "error", err)
+		os.Exit(1)
+	}
+	defer databasePool.Close()
+	if err := database.Migrate(context.Background(), databasePool); err != nil {
+		logger.Error("database migration failed", "error", err)
 		os.Exit(1)
 	}
 
