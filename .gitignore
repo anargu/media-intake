@@ -1,0 +1,33 @@
+# Go build output
+/bin/
+/build/
+/dist/
+/media-intake
+*.exe
+*.test
+
+# Coverage profiles
+coverage.out
+coverage-*.out
+*.coverprofile
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Local runtime data
+/data/
+/.local/
+/tmp/
+
+# Editor metadata
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS metadata
+.DS_Store
+._*
