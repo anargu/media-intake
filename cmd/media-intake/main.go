@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/anargu/media-intake/internal/capture"
 	"github.com/anargu/media-intake/internal/config"
 	"github.com/anargu/media-intake/internal/database"
 	"github.com/anargu/media-intake/internal/server"
@@ -41,6 +42,12 @@ func main() {
 	defer databasePool.Close()
 	if err := database.Migrate(context.Background(), databasePool); err != nil {
 		logger.Error("database migration failed", "error", err)
+		os.Exit(1)
+	}
+
+	_, err = capture.NewFileSystemStorage(cfg.CaptureStorageDir, cfg.MaxFrameBytes)
+	if err != nil {
+		logger.Error("storage directory is not writable")
 		os.Exit(1)
 	}
 
