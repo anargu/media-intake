@@ -9,6 +9,11 @@ import (
 
 func New() http.Handler {
 	router := chi.NewRouter()
+
+	// Applying Middlewares
+	router.Use(withRequestID)
+
+	// Endpoints
 	router.Get("/livez", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
 		response.WriteHeader(http.StatusOK)
