@@ -9,12 +9,20 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
+type storageFileOps struct {
+	link          func(string, string) error
+	syncDirectory func(string) error
+	remove        func(string) error
+}
 type FileSystemStorage struct {
 	rootDir       string
 	maxFrameBytes int64 // Max Size
 	stagingDir    string
+	fileOps       storageFileOps
 }
 
 const hardMaxFrameBytes = 10 * 1024 * 1024 // 10MB
@@ -44,11 +52,22 @@ func NewFileSystemStorage(rootDir string, maxFrameBytes int64) (*FileSystemStora
 		return nil, errors.New("staging directory is not writable")
 	}
 
-	return &FileSystemStorage{
+	storage := &FileSystemStorage{
 		rootDir:       rootDir,
 		maxFrameBytes: maxFrameBytes,
 		stagingDir:    stagingDir,
-	}, nil
+		fileOps: storageFileOps{
+			link:          os.Link,
+			syncDirectory: syncDirectory,
+			remove:        os.Remove,
+		},
+	}
+
+	if err := storage.cleanupStaleStagingFiles(time.Now()); err != nil {
+		return nil, errors.New("failed to clean up stale staging files")
+	}
+
+	return storage, nil
 }
 
 // startup check
@@ -141,4 +160,40 @@ func (cr contextReader) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	return cr.reader.Read(p)
+}
+
+func (s *FileSystemStorage) cleanupStaleStagingFiles(now time.Time) error {
+	entries, err := os.ReadDir(s.stagingDir)
+	if err != nil {
+		return errors.New("failed to read staging directory")
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return errors.New("failed to inspect staging entry")
+		}
+
+		if !info.Mode().IsRegular() {
+			continue
+		}
+
+		// Remove files older than 1 hour
+		if now.Sub(info.ModTime()) > 1*time.Hour {
+			filename := entry.Name()
+			// Skip removing files that don't have the ".part" suffix
+			if !strings.HasSuffix(filename, ".part") {
+				continue
+			}
+
+			if err := os.Remove(filepath.Join(s.stagingDir, entry.Name())); err != nil {
+				return errors.New("failed to remove stale staging file")
+			}
+		}
+	}
+	return nil
 }

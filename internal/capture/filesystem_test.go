@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestNewFileSystemStorageChecksDirectoriesAreWritable(t *testing.T) {
@@ -64,7 +65,7 @@ func TestNewFileSystemStorageChecksDirectoriesAreWritable(t *testing.T) {
 	})
 }
 
-// Happy path:
+// Happy path
 func TestStageWritesFrameAndComputesMetadata(t *testing.T) {
 	cases := []struct {
 		name string
@@ -158,6 +159,61 @@ func TestStageCanceledContextDoesNotCreateStagingFile(t *testing.T) {
 	assertStagingDirectoryEmpty(t, storage.stagingDir)
 }
 
+// Happy path
+func TestCleanupStaleStagingFilesRemovesOnlyOldPartFiles(t *testing.T) {
+	storage := newTestFileSystemStorage(t, hardMaxFrameBytes)
+	now := time.Now()
+	oldTime := now.Add(-2 * time.Hour)
+	recentTime := now.Add(-30 * time.Minute)
+
+	oldPart := filepath.Join(storage.stagingDir, "old.part")
+	oldOther := filepath.Join(storage.stagingDir, "old.txt")
+	recentPart := filepath.Join(storage.stagingDir, "recent.part")
+	partDirectory := filepath.Join(storage.stagingDir, "directory.part")
+
+	for _, path := range []string{oldPart, oldOther, recentPart} {
+		if err := os.WriteFile(path, []byte("frame"), 0o600); err != nil {
+			t.Fatalf("create test file: %v", err)
+		}
+	}
+	if err := os.Mkdir(partDirectory, 0o700); err != nil {
+		t.Fatalf("create test directory: %v", err)
+	}
+	setModTime(t, oldPart, oldTime)
+	setModTime(t, oldOther, oldTime)
+	setModTime(t, recentPart, recentTime)
+	setModTime(t, partDirectory, oldTime)
+
+	if err := storage.cleanupStaleStagingFiles(now); err != nil {
+		t.Fatalf("cleanupStaleStagingFiles() error = %v", err)
+	}
+
+	assertPathAbsent(t, oldPart)
+	assertPathPresent(t, oldOther)
+	assertPathPresent(t, recentPart)
+	assertPathPresent(t, partDirectory)
+}
+
+func TestCleanupStaleStagingFilesKeepsFileAtOneHourCutoff(t *testing.T) {
+	storage := newTestFileSystemStorage(t, hardMaxFrameBytes)
+	path := filepath.Join(storage.stagingDir, "cutoff.part")
+	if err := os.WriteFile(path, []byte("frame"), 0o600); err != nil {
+		t.Fatalf("create test file: %v", err)
+	}
+
+	setModTime(t, path, time.Now().Add(-2*time.Hour))
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat test file: %v", err)
+	}
+	cleanupNow := info.ModTime().Add(time.Hour)
+
+	if err := storage.cleanupStaleStagingFiles(cleanupNow); err != nil {
+		t.Fatalf("cleanupStaleStagingFiles() error = %v", err)
+	}
+	assertPathPresent(t, path)
+}
+
 func newTestFileSystemStorage(t *testing.T, maxFrameBytes int64) *FileSystemStorage {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "frames")
@@ -176,6 +232,27 @@ func assertStagingDirectoryEmpty(t *testing.T, stagingDir string) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("staging directory contains leftover files: %v", entries)
+	}
+}
+
+func setModTime(t *testing.T, path string, modTime time.Time) {
+	t.Helper()
+	if err := os.Chtimes(path, modTime, modTime); err != nil {
+		t.Fatalf("set modification time: %v", err)
+	}
+}
+
+func assertPathAbsent(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("path %q still exists or could not be checked: %v", path, err)
+	}
+}
+
+func assertPathPresent(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Lstat(path); err != nil {
+		t.Errorf("path %q is missing or could not be checked: %v", path, err)
 	}
 }
 
