@@ -1,6 +1,12 @@
 package capture
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -57,3 +63,134 @@ func TestNewFileSystemStorageChecksDirectoriesAreWritable(t *testing.T) {
 		}
 	})
 }
+
+// Happy path:
+func TestStageWritesFrameAndComputesMetadata(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+	}{
+		{name: "one byte", data: []byte{0x2a}},
+		{name: "exactly the hard limit", data: bytes.Repeat([]byte{0x5a}, hardMaxFrameBytes)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := newTestFileSystemStorage(t, hardMaxFrameBytes)
+			staged, err := storage.Stage(context.Background(), bytes.NewReader(tc.data))
+			if err != nil {
+				t.Fatalf("Stage() error = %v", err)
+			}
+
+			got, err := os.ReadFile(staged.stagingPath)
+			if err != nil {
+				t.Fatalf("read staged frame: %v", err)
+			}
+			if !bytes.Equal(got, tc.data) {
+				t.Fatal("staged bytes do not match input")
+			}
+			if staged.size != int64(len(tc.data)) {
+				t.Errorf("size = %d, want %d", staged.size, len(tc.data))
+			}
+
+			wantHash := sha256.Sum256(tc.data)
+			if staged.sha256 != hex.EncodeToString(wantHash[:]) {
+				t.Errorf("sha256 = %q, want %q", staged.sha256, hex.EncodeToString(wantHash[:]))
+			}
+			if filepath.Ext(staged.stagingPath) != ".part" {
+				t.Errorf("staging file extension = %q, want .part", filepath.Ext(staged.stagingPath))
+			}
+		})
+	}
+}
+
+func TestStageRejectsEmptyAndOversizedFramesAndCleansUp(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+	}{
+		{name: "empty"},
+		{name: "one byte over hard limit", data: bytes.Repeat([]byte{0x7f}, hardMaxFrameBytes+1)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			storage := newTestFileSystemStorage(t, hardMaxFrameBytes)
+			staged, err := storage.Stage(context.Background(), bytes.NewReader(tc.data))
+			if err == nil {
+				t.Fatalf("Stage() = (%v, nil), want an error", staged)
+			}
+			if staged != nil {
+				t.Errorf("Stage() staged frame = %#v, want nil on error", staged)
+			}
+			assertStagingDirectoryEmpty(t, storage.stagingDir)
+		})
+	}
+}
+
+func TestStageReadFailureCleansUpPartialFile(t *testing.T) {
+	storage := newTestFileSystemStorage(t, hardMaxFrameBytes)
+	readErr := errors.New("simulated interrupted read")
+	reader := &failAfterBytesReader{data: []byte("partial frame"), err: readErr}
+
+	staged, err := storage.Stage(context.Background(), reader)
+	if err == nil {
+		t.Fatal("Stage() error = nil, want read failure")
+	}
+	if staged != nil {
+		t.Errorf("Stage() staged frame = %#v, want nil on error", staged)
+	}
+	assertStagingDirectoryEmpty(t, storage.stagingDir)
+}
+
+func TestStageCanceledContextDoesNotCreateStagingFile(t *testing.T) {
+	storage := newTestFileSystemStorage(t, hardMaxFrameBytes)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	staged, err := storage.Stage(ctx, bytes.NewReader([]byte("frame")))
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Stage() error = %v, want context.Canceled", err)
+	}
+	if staged != nil {
+		t.Errorf("Stage() staged frame = %#v, want nil on error", staged)
+	}
+	assertStagingDirectoryEmpty(t, storage.stagingDir)
+}
+
+func newTestFileSystemStorage(t *testing.T, maxFrameBytes int64) *FileSystemStorage {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "frames")
+	storage, err := NewFileSystemStorage(root, maxFrameBytes)
+	if err != nil {
+		t.Fatalf("NewFileSystemStorage() error = %v", err)
+	}
+	return storage
+}
+
+func assertStagingDirectoryEmpty(t *testing.T, stagingDir string) {
+	t.Helper()
+	entries, err := os.ReadDir(stagingDir)
+	if err != nil {
+		t.Fatalf("read staging directory: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("staging directory contains leftover files: %v", entries)
+	}
+}
+
+type failAfterBytesReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *failAfterBytesReader) Read(p []byte) (int, error) {
+	if !r.done {
+		r.done = true
+		return copy(p, r.data), nil
+	}
+	return 0, r.err
+}
+
+var _ io.Reader = (*failAfterBytesReader)(nil)
