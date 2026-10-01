@@ -29,7 +29,6 @@ func TestCaptureStoreRoundTrip(t *testing.T) {
 	_, err = testConn.Exec(ctx, `CREATE TEMP TABLE capture (
 		id uuid PRIMARY KEY,
 		idempotency_key text UNIQUE NOT NULL,
-		device_id text NOT NULL,
 		captured_at timestamptz NOT NULL,
 		amount numeric NOT NULL,
 		currency text NOT NULL,
@@ -44,7 +43,6 @@ func TestCaptureStoreRoundTrip(t *testing.T) {
 	capture := Capture{
 		ID:             uuid.UUID{},
 		IdempotencyKey: "capture-key",
-		DeviceID:       "device-1",
 		CapturedAt:     time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
 		Amount:         "9007199254740993.01",
 		Currency:       "USD",
@@ -60,7 +58,7 @@ func TestCaptureStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get capture: %v", err)
 	}
-	if got.ID != capture.ID || got.IdempotencyKey != capture.IdempotencyKey || got.DeviceID != capture.DeviceID || got.CapturedAt != capture.CapturedAt || got.Amount != capture.Amount || got.Currency != capture.Currency || got.FramePath != capture.FramePath || got.FrameSize != capture.FrameSize || got.CreatedAt != capture.CreatedAt {
+	if got.ID != capture.ID || got.IdempotencyKey != capture.IdempotencyKey || got.CapturedAt != capture.CapturedAt || got.Amount != capture.Amount || got.Currency != capture.Currency || got.FramePath != capture.FramePath || got.FrameSize != capture.FrameSize || got.CreatedAt != capture.CreatedAt {
 		t.Errorf("getCapture() = %#v, want matching capture fields", got)
 	}
 }
@@ -83,7 +81,6 @@ func TestGetCaptureNotFound(t *testing.T) {
 	_, err = testConn.Exec(ctx, `CREATE TEMP TABLE capture (
 		id uuid PRIMARY KEY,
 		idempotency_key text UNIQUE NOT NULL,
-		device_id text NOT NULL,
 		captured_at timestamptz NOT NULL,
 		amount numeric NOT NULL,
 		currency text NOT NULL,

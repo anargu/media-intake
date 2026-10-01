@@ -30,12 +30,11 @@ func NewPostgresStore(pool *pgxpool.Pool) (*PostgresStore, error) {
 func (s *PostgresStore) Insert(ctx context.Context, capture Capture) error {
 	_, err := s.db.Exec(ctx,
 		`INSERT INTO capture (
-			id, idempotency_key, device_id, captured_at, amount,
+			id, idempotency_key, captured_at, amount,
 			currency, frame_path, frame_size, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		capture.ID,
 		capture.IdempotencyKey,
-		capture.DeviceID,
 		capture.CapturedAt,
 		capture.Amount,
 		capture.Currency,
@@ -53,13 +52,12 @@ func (s *PostgresStore) GetByIdempotencyKey(ctx context.Context, idempotencyKey 
 	var result Capture
 	var capturedAt, createdAt time.Time
 	err := s.db.QueryRow(ctx, `
-		SELECT id, idempotency_key, device_id, captured_at, amount::text,
+		SELECT id, idempotency_key, captured_at, amount::text,
 		       currency, frame_path, frame_size, created_at
 		FROM capture
 		WHERE idempotency_key = $1`, idempotencyKey).Scan(
 		&result.ID,
 		&result.IdempotencyKey,
-		&result.DeviceID,
 		&capturedAt,
 		&result.Amount,
 		&result.Currency,
