@@ -32,7 +32,7 @@ func TestLivez(t *testing.T) {
 
 	logger := testLogger()
 
-	New(logger, &fakeDatabaseHealth{}).ServeHTTP(response, request)
+	New(logger, CaptureLimits{}, &fakeDatabaseHealth{}, nil, nil).ServeHTTP(response, request)
 
 	result := response.Result()
 	defer result.Body.Close()
@@ -70,7 +70,7 @@ func TestReadyz(t *testing.T) {
 			}}
 			request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 			response := httptest.NewRecorder()
-			New(testLogger(), database).ServeHTTP(response, request)
+			New(testLogger(), CaptureLimits{}, database, nil, nil).ServeHTTP(response, request)
 
 			if !pingCalled {
 				t.Fatal("database Ping was not called")
@@ -108,7 +108,7 @@ func TestRouterErrorsUseSharedEnvelope(t *testing.T) {
 		{name: "method not allowed", method: http.MethodPost, path: "/livez", wantStatus: http.StatusMethodNotAllowed, wantError: apierror.MethodNotAllowed},
 	}
 
-	handler := New(testLogger(), nil)
+	handler := New(testLogger(), CaptureLimits{}, nil, nil, nil)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			request := httptest.NewRequest(tc.method, tc.path, nil)

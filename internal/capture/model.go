@@ -14,3 +14,9 @@ type Capture struct {
 	FrameSize      int64     `json:"frame_size"`
 	CreatedAt      string    `json:"created_at"`
 }
+
+type CreateCaptureInput struct {
+	IdempotencyKey string
+	Manifest       Manifest
+	Frame          *StagedFrame
+}

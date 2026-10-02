@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/anargu/media-intake/internal/apierror"
+	"github.com/anargu/media-intake/internal/capture"
 	"github.com/anargu/media-intake/internal/requestid"
 	"github.com/go-chi/chi/v5"
 )
@@ -18,7 +19,17 @@ type DatabaseHealth interface {
 	Ping(context.Context) error
 }
 
-func New(logger *slog.Logger, database DatabaseHealth) http.Handler {
+type CaptureLimits struct {
+	MaxBodyBytes     int64
+	MaxManifestBytes int64
+	RequestTimeout   time.Duration
+}
+
+func New(logger *slog.Logger,
+	captureLimits CaptureLimits,
+	database DatabaseHealth,
+	fileStorage *capture.FileSystemStorage,
+	captureCreator CaptureCreator) http.Handler {
 	router := chi.NewRouter()
 
 	// Applying Middlewares
@@ -53,6 +64,10 @@ func New(logger *slog.Logger, database DatabaseHealth) http.Handler {
 		response.Header().Set("Content-Type", "application/json")
 		response.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(response, "{\"status\":\"ready\"}\n")
+	})
+
+	router.Route("/v1", func(r chi.Router) {
+		r.Post("/captures", CaptureHandler(captureLimits, fileStorage, captureCreator))
 	})
 
 	router.NotFound(func(response http.ResponseWriter, _ *http.Request) {
