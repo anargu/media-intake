@@ -28,7 +28,7 @@ func TestServeDrainsInFlightRequest(t *testing.T) {
 		<-releaseRequest
 		response.WriteHeader(http.StatusNoContent)
 	})
-	httpServer := newHTTPServer("127.0.0.1:0", handler)
+	httpServer := newHTTPServer("127.0.0.1:0", handler, 30*time.Second)
 	shutdownStarted := make(chan struct{})
 	httpServer.RegisterOnShutdown(func() {
 		close(shutdownStarted)

@@ -20,7 +20,6 @@ import (
 
 const (
 	readHeaderTimeout = 5 * time.Second
-	readTimeout       = 30 * time.Second
 	writeTimeout      = 30 * time.Second
 	idleTimeout       = 60 * time.Second
 )
@@ -45,11 +44,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	_, err = capture.NewFileSystemStorage(cfg.CaptureStorageDir, cfg.MaxFrameBytes)
+	fileSystemstorage, err := capture.NewFileSystemStorage(cfg.CaptureStorageDir, cfg.MaxFrameBytes)
 	if err != nil {
 		logger.Error("storage directory is not writable")
 		os.Exit(1)
 	}
+
+	captureService := &capture.CaptureService{}
 
 	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -57,7 +58,15 @@ func main() {
 	httpServer := newHTTPServer(cfg.HTTPAddr,
 		server.New(
 			logger,
-			databasePool))
+			server.CaptureLimits{
+				MaxBodyBytes:     cfg.MaxBodyBytes,
+				MaxManifestBytes: cfg.MaxManifestBytes,
+				RequestTimeout:   cfg.RequestTimeout,
+			},
+			databasePool,
+			fileSystemstorage,
+			captureService),
+		cfg.RequestTimeout)
 
 	listener, err := net.Listen("tcp", cfg.HTTPAddr)
 	if err != nil {
@@ -73,12 +82,12 @@ func main() {
 	logger.Info("server stopped")
 }
 
-func newHTTPServer(address string, handler http.Handler) *http.Server {
+func newHTTPServer(address string, handler http.Handler, requestTimeout time.Duration) *http.Server {
 	return &http.Server{
 		Addr:              address,
 		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
-		ReadTimeout:       readTimeout,
+		ReadTimeout:       requestTimeout,
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       idleTimeout,
 	}
