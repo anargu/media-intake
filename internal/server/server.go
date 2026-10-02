@@ -1,23 +1,65 @@
 package server
 
 import (
+	"context"
 	"io"
+	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/anargu/media-intake/internal/apierror"
+	"github.com/anargu/media-intake/internal/requestid"
 	"github.com/go-chi/chi/v5"
 )
 
-func New() http.Handler {
+const readinessTimeout = 2 * time.Second
+
+type DatabaseHealth interface {
+	Ping(context.Context) error
+}
+
+func New(logger *slog.Logger, database DatabaseHealth) http.Handler {
 	router := chi.NewRouter()
 
 	// Applying Middlewares
 	router.Use(withRequestID)
+	router.Use(requestLogger(logger))
 
 	// Endpoints
 	router.Get("/livez", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
 		response.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(response, "{\"status\":\"alive\"}\n")
+	})
+	router.Get("/readyz", func(response http.ResponseWriter, request *http.Request) {
+		if database == nil {
+			writeError(response, apierror.ServiceUnavailable)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(request.Context(), readinessTimeout)
+		defer cancel()
+		if err := database.Ping(ctx); err != nil {
+			requestID, _ := requestid.FromContext(request.Context())
+
+			logger.Error("database readiness check failed",
+				"request_id", requestID,
+				"error", err,
+			)
+			writeError(response, apierror.ServiceUnavailable)
+			return
+		}
+
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(response, "{\"status\":\"ready\"}\n")
+	})
+
+	router.NotFound(func(response http.ResponseWriter, _ *http.Request) {
+		writeError(response, apierror.NotFound)
+	})
+	router.MethodNotAllowed(func(response http.ResponseWriter, _ *http.Request) {
+		writeError(response, apierror.MethodNotAllowed)
 	})
 
 	return router

@@ -54,7 +54,11 @@ func main() {
 	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	httpServer := newHTTPServer(cfg.HTTPAddr, server.New())
+	httpServer := newHTTPServer(cfg.HTTPAddr,
+		server.New(
+			logger,
+			databasePool))
+
 	listener, err := net.Listen("tcp", cfg.HTTPAddr)
 	if err != nil {
 		logger.Error("server failed", "error", err)

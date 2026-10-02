@@ -12,7 +12,11 @@ func TestWriteError(t *testing.T) {
 	publicErrors := []apierror.PublicError{
 		apierror.ManifestInvalid,
 		apierror.IdempotencyKeyInvalid,
+		apierror.MultipartInvalid,
 		apierror.FrameTooLarge,
+		apierror.ManifestTooLarge,
+		apierror.RequestBodyTooLarge,
+		apierror.FrameInvalid,
 		apierror.CaptureNotFound,
 		apierror.InternalError,
 		apierror.ServiceUnavailable,
