@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"uuid"
 )
@@ -131,6 +132,50 @@ func TestPublishStagingUnlinkFailureIsCleanupWarning(t *testing.T) {
 	}
 	if _, err := os.Stat(staged.stagingPath); err != nil {
 		t.Errorf("staging file missing after injected unlink failure: %v", err)
+	}
+}
+
+func TestCleanupAfterCrashBetweenLinkAndStagingUnlink(t *testing.T) {
+	storage, staged := stageFrameForPublish(t, []byte("frame bytes"))
+	storage.fileOps.remove = func(string) error { return errors.New("simulated crash before unlink") }
+
+	result, err := staged.Publish(uuid.UUID{})
+	if err != nil {
+		t.Fatalf("Publish() error = %v, want publication with cleanup warning", err)
+	}
+	if result.State != Published {
+		t.Fatalf("Publish() state = %v, want Published", result.State)
+	}
+
+	finalPath := filepath.Join(storage.rootDir, result.RelativePath)
+	finalInfo, err := os.Stat(finalPath)
+	if err != nil {
+		t.Fatalf("stat final frame before cleanup: %v", err)
+	}
+	stagingInfo, err := os.Stat(staged.stagingPath)
+	if err != nil {
+		t.Fatalf("stat staging frame before cleanup: %v", err)
+	}
+	if !os.SameFile(finalInfo, stagingInfo) {
+		t.Fatal("final and staging paths do not refer to the same inode")
+	}
+
+	if err := os.Chtimes(staged.stagingPath, time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour)); err != nil {
+		t.Fatalf("make staging name stale: %v", err)
+	}
+	storage.fileOps.remove = os.Remove
+	if err := storage.cleanupStaleStagingFiles(time.Now()); err != nil {
+		t.Fatalf("cleanupStaleStagingFiles() error = %v", err)
+	}
+
+	assertPathAbsent(t, staged.stagingPath)
+	assertPathPresent(t, finalPath)
+	got, err := os.ReadFile(finalPath)
+	if err != nil {
+		t.Fatalf("read final frame after cleanup: %v", err)
+	}
+	if string(got) != "frame bytes" {
+		t.Errorf("final frame = %q, want %q", got, "frame bytes")
 	}
 }
 

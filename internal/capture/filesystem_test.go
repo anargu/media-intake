@@ -144,6 +144,26 @@ func TestStageReadFailureCleansUpPartialFile(t *testing.T) {
 	assertStagingDirectoryEmpty(t, storage.stagingDir)
 }
 
+func TestStageWriteFailureCleansUpPartialFile(t *testing.T) {
+	storage := newTestFileSystemStorage(t, hardMaxFrameBytes)
+	writeErr := errors.New("simulated staging write failure")
+	storage.fileOps.copy = func(dst io.Writer, _ io.Reader) (int64, error) {
+		if _, err := dst.Write([]byte("partial frame")); err != nil {
+			return 0, err
+		}
+		return int64(len("partial frame")), writeErr
+	}
+
+	staged, err := storage.Stage(context.Background(), bytes.NewReader([]byte("frame")))
+	if err == nil {
+		t.Fatal("Stage() error = nil, want simulated write failure")
+	}
+	if staged != nil {
+		t.Errorf("Stage() staged frame = %#v, want nil", staged)
+	}
+	assertStagingDirectoryEmpty(t, storage.stagingDir)
+}
+
 func TestStageCanceledContextDoesNotCreateStagingFile(t *testing.T) {
 	storage := newTestFileSystemStorage(t, hardMaxFrameBytes)
 	ctx, cancel := context.WithCancel(context.Background())

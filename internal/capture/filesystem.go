@@ -14,6 +14,7 @@ import (
 )
 
 type storageFileOps struct {
+	copy          func(io.Writer, io.Reader) (int64, error)
 	link          func(string, string) error
 	syncDirectory func(string) error
 	remove        func(string) error
@@ -57,6 +58,7 @@ func NewFileSystemStorage(rootDir string, maxFrameBytes int64) (*FileSystemStora
 		maxFrameBytes: maxFrameBytes,
 		stagingDir:    stagingDir,
 		fileOps: storageFileOps{
+			copy:          io.Copy,
 			link:          os.Link,
 			syncDirectory: syncDirectory,
 			remove:        os.Remove,
@@ -118,7 +120,7 @@ func (s *FileSystemStorage) Stage(ctx context.Context, src io.Reader) (staged *S
 		s.maxFrameBytes+1,
 	)
 
-	size, err := io.Copy(io.MultiWriter(file, hasher), limitedReader)
+	size, err := s.fileOps.copy(io.MultiWriter(file, hasher), limitedReader)
 	if err != nil {
 		return nil, errors.New("failed to write to staging file")
 	}
