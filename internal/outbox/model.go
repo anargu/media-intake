@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"encoding/json"
+	"time"
 
 	"uuid"
 )
@@ -17,4 +18,16 @@ type Outbox struct {
 	LastError    string          `json:"last_error"`
 	CreatedAt    string          `json:"created_at"`
 	DeliveredAt  string          `json:"delivered_at"`
+}
+
+type CaptureAcceptedPayload struct {
+	Version int             `json:"version"`
+	Capture CaptureMetadata `json:"capture"`
+}
+
+type CaptureMetadata struct {
+	ID         string    `json:"id"`
+	CapturedAt time.Time `json:"capturedAt"`
+	Amount     string    `json:"amount"`
+	Currency   string    `json:"currency"`
 }

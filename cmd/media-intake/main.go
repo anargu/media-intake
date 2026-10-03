@@ -50,7 +50,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	captureService := &capture.CaptureService{}
+	captureService := capture.NewCaptureService(databasePool)
 
 	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
