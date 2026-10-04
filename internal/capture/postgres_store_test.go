@@ -50,7 +50,7 @@ func TestCaptureStoreRoundTrip(t *testing.T) {
 		FrameSize:      1234,
 		CreatedAt:      time.Date(2026, 9, 30, 12, 1, 0, 0, time.UTC),
 	}
-	if err := store.Insert(ctx, capture); err != nil {
+	if inserted, err := store.Insert(ctx, capture); err != nil || !inserted {
 		t.Fatalf("insert capture: %v", err)
 	}
 
