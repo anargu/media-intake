@@ -19,6 +19,7 @@ const (
 	defaultMaxBodyBytes       = 11 * 1024 * 1024 // 11 MB
 	defaultRequestTimeout     = 30 * time.Second
 	defaultShutdownTimeout    = 15 * time.Second
+	defaultDownstreamURL      = "http://downstream:8080/v1/captures"
 	defaultDownstreamTimeout  = 5 * time.Second
 	defaultOutboxOperationTTL = 10 * time.Second
 	defaultOutboxPollInterval = 500 * time.Millisecond
@@ -37,6 +38,7 @@ type Config struct {
 	MaxManifestBytes       int64
 	MaxBodyBytes           int64
 	RequestTimeout         time.Duration
+	DownstreamURL          string
 	DownstreamTimeout      time.Duration
 	OutboxOperationTimeout time.Duration
 	OutboxPollInterval     time.Duration
@@ -81,6 +83,18 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	downstreamURL := envOrDefault("DOWNSTREAM_URL", defaultDownstreamURL)
+	parsed, err := url.Parse(downstreamURL)
+	if err != nil ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Hostname() == "" ||
+		parsed.User != nil ||
+		parsed.Fragment != "" {
+		return Config{}, fmt.Errorf("DOWNSTREAM_URL: invalid HTTP endpoint")
+	}
+	if outboxOperationTimeout <= downstreamTimeout {
+		return Config{}, fmt.Errorf("OUTBOX_OPERATION_TIMEOUT: must exceed DOWNSTREAM_TIMEOUT")
+	}
 	logLevel := envOrDefault("LOG_LEVEL", defaultLogLevel)
 	if !validLogLevel(logLevel) {
 		return Config{}, fmt.Errorf("LOG_LEVEL: unsupported log level %q", logLevel)
@@ -95,6 +109,7 @@ func Load() (Config, error) {
 		MaxManifestBytes:       defaultMaxManifestBytes,
 		MaxBodyBytes:           defaultMaxBodyBytes,
 		RequestTimeout:         requestTimeout,
+		DownstreamURL:          downstreamURL,
 		DownstreamTimeout:      downstreamTimeout,
 		OutboxOperationTimeout: outboxOperationTimeout,
 		OutboxPollInterval:     defaultOutboxPollInterval,
