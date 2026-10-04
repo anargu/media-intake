@@ -1,10 +1,10 @@
 # Media Intake
 
-A Go service accepts captures, saves the frame on a volume, commits capture and outbox rows in PostgreSQL, then delivers to a stub downstream outside the client request.
+It accepts captures, saves the frame on a volume, commits capture and outbox rows in PostgreSQL, then delivers to a stub downstream outside the client request.
 
 ## Run and inspect
 
-Requires Docker 24+ with Compose v2. Migrations run automatically.
+Requires Docker 24+ & Compose v2. Migrations run automatically.
 
 ```sh
 # run service (one command)
@@ -22,7 +22,7 @@ send "$key" & send "$key" & wait
 
 curl --fail http://localhost:8080/v1/captures/demo-1
 docker compose logs app downstream
-docker compose exec -T db psql -U media_intake -d media_intake -c 'SELECT id,status,attempt_count,next_attempt_at FROM outbox ORDER BY created_at;'
+docker compose exec -T db psql -U media_intake -d media_intake -c 'SELECT o.id,o.status,o.attempt_count,o.next_attempt_at,o.last_error,c.frame_path FROM outbox o JOIN capture c ON c.id=o.capture_id ORDER BY o.created_at;'
 ```
 
 A new key should return `201`; repeats return `200` with the original capture. Watch the outbox change from `pending` through `retry` to `delivered` or `dead`. The worker sends metadata and original frame bytes with the stable outbox UUID as its delivery key; downstream must deduplicate retries. `STUB_STATUS=503 docker compose up -d downstream` exercises retries. `docker compose restart app` exercises recovery.
@@ -31,7 +31,18 @@ A new key should return `201`; repeats return `200` with the original capture. W
 
 `capture.idempotency_key` is unique: under `READ COMMITTED`, an insert elects one winner and a fresh query returns that winner to the loser. Different keys remain distinct. `NUMERIC(20,2)` preserves decimal money; checks constrain amount and frame size. `outbox.capture_id` is unique, and state checks guard `pending`, `retry`, `delivered`, and `dead`. A partial index finds due work. Capture and outbox commit together. The frame volume is separate, so a crash or uncertain commit may leave an orphan; possibly committed frames are preserved.
 
-Workers hold `FOR UPDATE SKIP LOCKED` through bounded HTTP and state update. Delivery is at least once, with exponential jittered retry and 8 attempts. Dead events need guarded manual re-drive. Holding a database connection during HTTP favors simple concurrency safety over throughput.
+Workers hold `FOR UPDATE SKIP LOCKED` through bounded HTTP and state update. Delivery is at least once, with exponential jittered retry and 8 attempts. Holding a database connection during HTTP favors simple concurrency safety over throughput.
+
+To re-drive a `dead` event, inspect `last_error` and the capture's `frame_path`; fix the cause first. In `psql`, replace the UUID and run:
+
+```sql
+UPDATE outbox SET status = 'pending', attempt_count = 0,
+    next_attempt_at = now(), last_error = NULL
+WHERE id = 'REPLACE_WITH_OUTBOX_UUID'::uuid AND status = 'dead'
+RETURNING id, status;
+```
+
+Expect one returned row. This keeps the delivery key stable for downstream deduplication.
 
 ## Tests and dependencies
 
@@ -45,7 +56,7 @@ export CAPTURE_STORAGE_DIR="$(mktemp -d)"
 go test ./...
 ```
 
-Built with Go 1.27.1 and PostgreSQL 17. Directly used packages: chi/v5 5.3.2 (routing), pgx/v5 5.11.0 (SQL/pool), Tern/v2 2.4.3 (migrations), and shopspring/decimal 1.4.0 (exact amounts).
+Built with Go 1.27.1 and PostgreSQL 17. Used packages: chi/v5 5.3.2 (routing), pgx/v5 5.11.0 (SQL/pool), Tern/v2 2.4.3 (migrations), and shopspring/decimal 1.4.0 (exact amounts).
 
 ## Public error codes
 
@@ -63,4 +74,8 @@ Responses include `message`, `code`, `errorClass`, and `httpCode`; the code pref
 
 ## Known gaps
 
-HTTP requests have JSON logs with request IDs, but capture-service warnings use the default logger without that ID. Manifest and frame contents are not logged. The stub's deduplication is in memory. Guarded re-drive, combined in-flight signal tests, and clean-clone verification remain untested. Optional gRPC, broker, S3, and OpenAPI extensions were cut.
+HTTP requests have JSON logs with request IDs, but capture-service warnings use the default logger without that ID.
+Manifest and frame contents are not logged.
+The stub's deduplication is in memory.
+The documented guarded re-drive procedure remains untested end to end; combined in-flight signal tests and clean-clone verification are also missing. 
+Optional gRPC, broker, S3, and OpenAPI extensions were cut.
