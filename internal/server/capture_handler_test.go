@@ -97,3 +97,27 @@ func TestCaptureHandlerCreatorErrorUsesInternalError(t *testing.T) {
 		t.Errorf("error = %#v, want %#v", responseError, apierror.InternalError)
 	}
 }
+
+func TestCaptureHandlerUnknownCommitReturnsTransientError(t *testing.T) {
+	storage, err := capture.NewFileSystemStorage(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	creator := &fakeCaptureCreator{err: errors.Join(capture.ErrCommitOutcomeUnknown, errors.New("private database details"))}
+	handler := CaptureHandler(CaptureLimits{MaxBodyBytes: 1 << 20, MaxManifestBytes: 64 << 10, RequestTimeout: time.Second}, storage, creator)
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, newCapturePostRequest(t, "unknown-commit", "12.34"))
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	var public apierror.PublicError
+	if err := json.Unmarshal(response.Body.Bytes(), &public); err != nil {
+		t.Fatal(err)
+	}
+	if public != apierror.ServiceUnavailable {
+		t.Fatalf("error=%#v", public)
+	}
+}
