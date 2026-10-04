@@ -2,14 +2,43 @@ services:
   app:
     build:
       context: .
+      target: app
     environment:
       DATABASE_URL: postgres://media_intake:media_intake_dev@db:5432/media_intake?sslmode=disable
+      DOWNSTREAM_URL: http://downstream:8080/v1/captures
       HTTP_ADDR: :8080
+      CAPTURE_STORAGE_DIR: /data/captures
     ports:
-      - "8080:8080"
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      - capture_frames:/data/captures
     depends_on:
       db:
         condition: service_healthy
+      downstream:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://localhost:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    stop_grace_period: 25s
+
+  downstream:
+    build:
+      context: .
+      target: downstream
+    environment:
+      STUB_STATUS: "${STUB_STATUS:-204}"
+      STUB_DELAY: "${STUB_DELAY:-0s}"
+    ports:
+      - "${STUB_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD", "/healthcheck", "http://localhost:8080/livez"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   db:
     image: postgres:17-alpine
@@ -18,7 +47,7 @@ services:
       POSTGRES_USER: media_intake
       POSTGRES_PASSWORD: media_intake_dev
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -29,3 +58,4 @@ services:
 
 volumes:
   postgres_data:
+  capture_frames:
