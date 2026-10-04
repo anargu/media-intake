@@ -121,3 +121,74 @@ func TestCaptureHandlerUnknownCommitReturnsTransientError(t *testing.T) {
 		t.Fatalf("error=%#v", public)
 	}
 }
+
+func TestCaptureHandlerClassifiesInvalidFrames(t *testing.T) {
+	tests := []struct {
+		name          string
+		key           string
+		frame         []byte
+		maxFrameBytes int64
+		maxBodyBytes  int64
+		want          apierror.PublicError
+	}{
+		{name: "invalid key", key: "", frame: []byte("frame"), maxFrameBytes: 2048, maxBodyBytes: 1 << 20, want: apierror.IdempotencyKeyInvalid},
+		{name: "empty frame", key: "test-key", maxFrameBytes: 4, maxBodyBytes: 1 << 20, want: apierror.FrameInvalid},
+		{name: "oversized frame", key: "test-key", frame: []byte("12345"), maxFrameBytes: 4, maxBodyBytes: 1 << 20, want: apierror.FrameTooLarge},
+		{name: "oversized body during frame read", key: "test-key", frame: bytes.Repeat([]byte("x"), 1024), maxFrameBytes: 2048, maxBodyBytes: 300, want: apierror.RequestBodyTooLarge},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := &bytes.Buffer{}
+			writer := multipart.NewWriter(body)
+			if err := writer.WriteField("manifest", `{"capturedAt":"2026-10-03T12:00:00Z","amount":"12.34","currency":"PEN"}`); err != nil {
+				t.Fatal(err)
+			}
+
+			header := make(textproto.MIMEHeader)
+			header.Set("Content-Disposition", `form-data; name="frame"; filename="frame.jpg"`)
+			header.Set("Content-Type", "image/jpeg")
+
+			part, err := writer.CreatePart(header)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := part.Write(tt.frame); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			request := httptest.NewRequest(http.MethodPost, "/v1/captures", body)
+			request.Header.Set("Content-Type", writer.FormDataContentType())
+			request.Header.Set("Idempotency-Key", tt.key)
+
+			storage, err := capture.NewFileSystemStorage(t.TempDir(), tt.maxFrameBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			creator := &fakeCaptureCreator{}
+			handler := CaptureHandler(CaptureLimits{
+				MaxBodyBytes: tt.maxBodyBytes, MaxManifestBytes: 64 << 10, RequestTimeout: time.Second,
+			}, storage, creator)
+
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != tt.want.HTTPCode {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, tt.want.HTTPCode, response.Body.String())
+			}
+			var got apierror.PublicError
+			if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Errorf("error = %#v, want %#v", got, tt.want)
+			}
+			if creator.called {
+				t.Error("invalid upload reached capture creation")
+			}
+		})
+	}
+}

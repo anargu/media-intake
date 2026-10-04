@@ -30,6 +30,11 @@ const hardMaxFrameBytes = 10 * 1024 * 1024 // 10MB
 
 var errPartialStagingCleanup = errors.New("failed to clean up partial staged frame")
 
+var (
+	ErrFrameEmpty    = errors.New("frame is empty")
+	ErrFrameTooLarge = errors.New("frame exceeds max bytes to process")
+)
+
 func NewFileSystemStorage(rootDir string, maxFrameBytes int64) (*FileSystemStorage, error) {
 	if rootDir == "" {
 		return nil, errors.New("rootDir must not be empty")
@@ -122,17 +127,17 @@ func (s *FileSystemStorage) Stage(ctx context.Context, src io.Reader) (staged *S
 
 	size, err := s.fileOps.copy(io.MultiWriter(file, hasher), limitedReader)
 	if err != nil {
-		return nil, errors.New("failed to write to staging file")
+		return nil, fmt.Errorf("failed to stage frame: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
 	if size == 0 {
-		return nil, errors.New("frame is empty")
+		return nil, ErrFrameEmpty
 	}
 	if size > s.maxFrameBytes {
-		return nil, errors.New("frame exceeds max bytes to process")
+		return nil, ErrFrameTooLarge
 	}
 	if err := file.Sync(); err != nil {
 		return nil, errors.New("could not sync staging file to disk")

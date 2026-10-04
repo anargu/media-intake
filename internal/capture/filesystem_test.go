@@ -107,19 +107,20 @@ func TestStageWritesFrameAndComputesMetadata(t *testing.T) {
 
 func TestStageRejectsEmptyAndOversizedFramesAndCleansUp(t *testing.T) {
 	cases := []struct {
-		name string
-		data []byte
+		name    string
+		data    []byte
+		wantErr error
 	}{
-		{name: "empty"},
-		{name: "one byte over hard limit", data: bytes.Repeat([]byte{0x7f}, hardMaxFrameBytes+1)},
+		{name: "empty", wantErr: ErrFrameEmpty},
+		{name: "one byte over hard limit", data: bytes.Repeat([]byte{0x7f}, hardMaxFrameBytes+1), wantErr: ErrFrameTooLarge},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			storage := newTestFileSystemStorage(t, hardMaxFrameBytes)
 			staged, err := storage.Stage(context.Background(), bytes.NewReader(tc.data))
-			if err == nil {
-				t.Fatalf("Stage() = (%v, nil), want an error", staged)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Stage() error = %v, want %v", err, tc.wantErr)
 			}
 			if staged != nil {
 				t.Errorf("Stage() staged frame = %#v, want nil on error", staged)
@@ -135,8 +136,8 @@ func TestStageReadFailureCleansUpPartialFile(t *testing.T) {
 	reader := &failAfterBytesReader{data: []byte("partial frame"), err: readErr}
 
 	staged, err := storage.Stage(context.Background(), reader)
-	if err == nil {
-		t.Fatal("Stage() error = nil, want read failure")
+	if !errors.Is(err, readErr) {
+		t.Fatalf("Stage() error = %v, want wrapped read error", err)
 	}
 	if staged != nil {
 		t.Errorf("Stage() staged frame = %#v, want nil on error", staged)

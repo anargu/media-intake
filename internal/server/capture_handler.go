@@ -117,10 +117,14 @@ func CaptureHandler(limits CaptureLimits, fileStorage *capture.FileSystemStorage
 						stagedFrame, err = fileStorage.Stage(r.Context(), part)
 						if err != nil {
 							var maxErr *http.MaxBytesError
-							if errors.As(err, &maxErr) {
+							switch {
+							case errors.As(err, &maxErr):
 								responseErr = apierror.RequestBodyTooLarge
-							} else {
-								// TODO: Map specific staging errors, such as an oversized or empty frame.
+							case errors.Is(err, capture.ErrFrameTooLarge):
+								responseErr = apierror.FrameTooLarge
+							case errors.Is(err, capture.ErrFrameEmpty):
+								responseErr = apierror.FrameInvalid
+							default:
 								responseErr = apierror.CaptureStorageUnavailable
 							}
 							hasResponseErr = true

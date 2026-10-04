@@ -63,4 +63,4 @@ Responses include `message`, `code`, `errorClass`, and `httpCode`; the code pref
 
 ## Known gaps
 
-Frame errors can currently return `503002` for empty or oversized input. HTTP requests have JSON logs with request IDs, but capture-service warnings use the default logger without that ID. Manifest and frame contents are not logged. The stub's deduplication is in memory. Guarded re-drive, combined in-flight signal tests, and clean-clone verification remain untested. Optional gRPC, broker, S3, and OpenAPI extensions were cut.
+HTTP requests have JSON logs with request IDs, but capture-service warnings use the default logger without that ID. Manifest and frame contents are not logged. The stub's deduplication is in memory. Guarded re-drive, combined in-flight signal tests, and clean-clone verification remain untested. Optional gRPC, broker, S3, and OpenAPI extensions were cut.
