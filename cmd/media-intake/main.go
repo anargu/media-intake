@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/anargu/media-intake/internal/capture"
 	"github.com/anargu/media-intake/internal/config"
 	"github.com/anargu/media-intake/internal/database"
+	"github.com/anargu/media-intake/internal/outbox"
 	"github.com/anargu/media-intake/internal/server"
 )
 
@@ -26,60 +28,82 @@ const (
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err := run(ctx, logger)
+	stop()
+	if err != nil {
+		logger.Error("service failed", "error", err)
+		os.Exit(1)
+	}
+}
 
+func run(ctx context.Context, logger *slog.Logger) error {
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("configuration failed", "error", err)
-		os.Exit(1)
+		return err
 	}
 
-	databasePool, err := database.Open(context.Background(), cfg.DatabaseURL)
+	// Database
+	pool, err := database.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
-		logger.Error("database connection failed", "error", err)
-		os.Exit(1)
+		return errors.New("database startup failed")
 	}
-	defer databasePool.Close()
-	if err := database.Migrate(context.Background(), databasePool); err != nil {
-		logger.Error("database migration failed", "error", err)
-		os.Exit(1)
+	defer pool.Close()
+
+	if err := database.Migrate(ctx, pool); err != nil {
+		return errors.New("database migration failed")
 	}
 
-	fileSystemstorage, err := capture.NewFileSystemStorage(cfg.CaptureStorageDir, cfg.MaxFrameBytes)
+	// Storage
+	storage, err := capture.NewFileSystemStorage(cfg.CaptureStorageDir, cfg.MaxFrameBytes)
 	if err != nil {
-		logger.Error("storage directory is not writable")
-		os.Exit(1)
+		return errors.New("storage startup failed")
+	}
+	root, err := os.OpenRoot(cfg.CaptureStorageDir)
+	if err != nil {
+		return errors.New("storage root startup failed")
+	}
+	defer root.Close()
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	defer transport.CloseIdleConnections()
+
+	client, err := outbox.NewDownstreamClient(cfg.DownstreamURL, cfg.DownstreamTimeout, transport)
+	if err != nil {
+		return err
+	}
+	// Worker
+	worker, err := outbox.NewWorker(pool,
+		client, root, cfg, logger,
+		time.Now, rand.Int64N, nil)
+	if err != nil {
+		return err
 	}
 
-	captureService := capture.NewCaptureService(databasePool)
+	ready := &runtimeReadiness{database: pool}
+	handler := server.New(
+		logger,
+		server.CaptureLimits{
+			MaxBodyBytes:     cfg.MaxBodyBytes,
+			MaxManifestBytes: cfg.MaxManifestBytes,
+			RequestTimeout:   cfg.RequestTimeout,
+		},
+		ready, storage, capture.NewCaptureService(pool))
 
-	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	workCtx, cancelWork := context.WithCancel(context.Background())
+	defer cancelWork()
 
-	httpServer := newHTTPServer(cfg.HTTPAddr,
-		server.New(
-			logger,
-			server.CaptureLimits{
-				MaxBodyBytes:     cfg.MaxBodyBytes,
-				MaxManifestBytes: cfg.MaxManifestBytes,
-				RequestTimeout:   cfg.RequestTimeout,
-			},
-			databasePool,
-			fileSystemstorage,
-			captureService),
-		cfg.RequestTimeout)
-
+	httpServer := newHTTPServer(cfg.HTTPAddr, handler, cfg.RequestTimeout)
+	httpServer.BaseContext = func(net.Listener) context.Context { return workCtx }
 	listener, err := net.Listen("tcp", cfg.HTTPAddr)
 	if err != nil {
-		logger.Error("server failed", "error", err)
-		os.Exit(1)
+		return errors.New("HTTP listener startup failed")
 	}
+	defer listener.Close()
 
-	logger.Info("server starting", "address", cfg.HTTPAddr)
-	if err := serve(signalContext, httpServer, listener, cfg.ShutdownTimeout); err != nil {
-		logger.Error("server failed", "error", err)
-		os.Exit(1)
-	}
-	logger.Info("server stopped")
+	return serveWithWorker(ctx, workCtx, cancelWork,
+		httpServer, listener, worker,
+		ready, cfg.ShutdownTimeout, logger)
 }
 
 func newHTTPServer(address string, handler http.Handler, requestTimeout time.Duration) *http.Server {
@@ -108,6 +132,7 @@ func serve(ctx context.Context, httpServer *http.Server, listener net.Listener, 
 	case <-ctx.Done():
 		shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
+
 		if err := httpServer.Shutdown(shutdownContext); err != nil {
 			return fmt.Errorf("shutdown HTTP server: %w", err)
 		}
