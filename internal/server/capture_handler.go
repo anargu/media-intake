@@ -163,8 +163,11 @@ func CaptureHandler(limits CaptureLimits, fileStorage *capture.FileSystemStorage
 		handedOff = true
 		result, err := captureCreator.CreateCapture(r.Context(), captureInput)
 		if err != nil || result == nil {
-			// TODO: Map specific creator errors to their API errors.
-			writeError(w, apierror.InternalError)
+			if errors.Is(err, capture.ErrCommitOutcomeUnknown) {
+				writeError(w, apierror.ServiceUnavailable)
+			} else {
+				writeError(w, apierror.InternalError)
+			}
 			return
 		}
 
