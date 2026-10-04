@@ -19,6 +19,11 @@ type DatabaseHealth interface {
 	Ping(context.Context) error
 }
 
+type CaptureService interface {
+	CaptureCreator
+	CaptureGetter
+}
+
 type CaptureLimits struct {
 	MaxBodyBytes     int64
 	MaxManifestBytes int64
@@ -29,7 +34,7 @@ func New(logger *slog.Logger,
 	captureLimits CaptureLimits,
 	database DatabaseHealth,
 	fileStorage *capture.FileSystemStorage,
-	captureCreator CaptureCreator) http.Handler {
+	captureService CaptureService) http.Handler {
 	router := chi.NewRouter()
 
 	// Applying Middlewares
@@ -67,7 +72,9 @@ func New(logger *slog.Logger,
 	})
 
 	router.Route("/v1", func(r chi.Router) {
-		r.Post("/captures", CaptureHandler(captureLimits, fileStorage, captureCreator))
+		r.Post("/captures", CaptureHandler(captureLimits, fileStorage, captureService))
+
+		r.Get("/captures/{key}", GetCaptureHandler(captureService))
 	})
 
 	router.NotFound(func(response http.ResponseWriter, _ *http.Request) {
