@@ -1,87 +1,66 @@
-# Media Intake Service Shell
+# Media Intake
 
-> **Phase: setup/service shell**
+A Go service accepts captures, saves the frame on a volume, commits capture and outbox rows in PostgreSQL, then delivers to a stub downstream outside the client request.
 
-This repository currently provides only the executable service shell: configuration loading, HTTP server lifecycle, graceful shutdown, and a liveness endpoint. It establishes the development and container baseline for later implementation.
+## Run and inspect
 
-## Prerequisites
-
-- Docker, when building or running the container image
-
-## Run locally
+Requires Docker 24+ with Compose v2. Migrations run automatically.
 
 ```sh
-go run ./cmd/media-intake
+# run service (one command)
+docker compose up -d
+# call requests
+curl --fail http://localhost:8080/readyz
+printf 'frame bytes' >/tmp/media-frame.jpg
+send() { curl -sS -H "Idempotency-Key: $1" -F 'manifest={"capturedAt":"2026-10-03T12:00:00Z","amount":"12.34","currency":"PEN"}' -F 'frame=@/tmp/media-frame.jpg;type=image/jpeg' http://localhost:8080/v1/captures; }
+send demo-1
+send demo-1
+
+# set key
+key="race-$(date +%s)"
+send "$key" & send "$key" & wait
+
+curl --fail http://localhost:8080/v1/captures/demo-1
+docker compose logs app downstream
+docker compose exec -T db psql -U media_intake -d media_intake -c 'SELECT id,status,attempt_count,next_attempt_at FROM outbox ORDER BY created_at;'
 ```
 
-The service uses these environment variables:
+A new key should return `201`; repeats return `200` with the original capture. Watch the outbox change from `pending` through `retry` to `delivered` or `dead`. The worker sends metadata and original frame bytes with the stable outbox UUID as its delivery key; downstream must deduplicate retries. `STUB_STATUS=503 docker compose up -d downstream` exercises retries. `docker compose restart app` exercises recovery.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `HTTP_ADDR` | `:8080` | TCP address for the HTTP server. |
-| `SHUTDOWN_TIMEOUT` | `15s` | Maximum graceful-shutdown duration, in Go duration syntax. |
+## Schema and guarantees
 
-With the service running, check liveness:
+`capture.idempotency_key` is unique: under `READ COMMITTED`, an insert elects one winner and a fresh query returns that winner to the loser. Different keys remain distinct. `NUMERIC(20,2)` preserves decimal money; checks constrain amount and frame size. `outbox.capture_id` is unique, and state checks guard `pending`, `retry`, `delivered`, and `dead`. A partial index finds due work. Capture and outbox commit together. The frame volume is separate, so a crash or uncertain commit may leave an orphan; possibly committed frames are preserved.
 
-```sh
-curl http://localhost:8080/livez
-```
+Workers hold `FOR UPDATE SKIP LOCKED` through bounded HTTP and state update. Delivery is at least once, with exponential jittered retry and 8 attempts. Dead events need guarded manual re-drive. Holding a database connection during HTTP favors simple concurrency safety over throughput.
 
-The response is `{"status":"alive"}` with HTTP status 200.
+## Tests and dependencies
 
-## Development commands
+PostgreSQL integration tests need the Compose database. Unit tests run in the same command; without `TEST_DATABASE_URL`, integration tests skip.
 
 ```sh
-# Format Go source
-go fmt ./...
-
-# Run tests
+docker compose up -d db
+export DATABASE_URL='postgres://media_intake:media_intake_dev@localhost:5432/media_intake?sslmode=disable'
+export TEST_DATABASE_URL="$DATABASE_URL"
+export CAPTURE_STORAGE_DIR="$(mktemp -d)"
 go test ./...
-
-# Run static analysis
-go vet ./...
-
-# Build the service
-go build -o bin/media-intake ./cmd/media-intake
 ```
 
-## Container
+Built with Go 1.27.1 and PostgreSQL 17. Directly used packages: chi/v5 5.3.2 (routing), pgx/v5 5.11.0 (SQL/pool), Tern/v2 2.4.3 (migrations), and shopspring/decimal 1.4.0 (exact amounts).
 
-Build the image from the repository root:
+## Public error codes
 
-```sh
-docker build -t media-intake:local .
-```
+Responses include `message`, `code`, `errorClass`, and `httpCode`; the code prefix matches the HTTP status.
 
-Run it on port 8080:
+| Code | Class | Code | Class |
+| --- | --- | --- | --- |
+| 400001 | IdempotencyKeyInvalid | 400002 | MultipartInvalid |
+| 404001 | CaptureNotFound | 404002 | NotFound |
+| 405001 | MethodNotAllowed | 413001 | FrameTooLarge |
+| 413002 | ManifestTooLarge | 413003 | RequestBodyTooLarge |
+| 422003 | ManifestInvalid | 422004 | FrameInvalid |
+| 500001 | InternalError | 503001 | ServiceUnavailable |
+| 503002 | CaptureStorageUnavailable | | |
 
-```sh
-docker run --rm -p 8080:8080 media-intake:local
-```
+## Known gaps
 
-Configuration can be overridden with Docker environment options, for example:
-
-```sh
-docker run --rm -p 8080:8080 \
-  -e HTTP_ADDR=:8080 \
-  -e SHUTDOWN_TIMEOUT=30s \
-  media-intake:local
-```
-
-## Current layout
-
-```text
-cmd/media-intake/  Service entry point and lifecycle wiring
-internal/config/   Environment configuration and validation
-internal/server/   HTTP router and liveness endpoint
-Dockerfile         Multi-stage production image
-```
-
-## Deferred scope
-
-The following are intentionally deferred beyond this setup/service-shell phase:
-
-- Database selection, schema, migrations, and persistence
-- Media intake APIs and processing behavior
-- Transactional outbox and downstream delivery
-- Docker Compose and supporting local infrastructure
+Frame errors can currently return `503002` for empty or oversized input. HTTP requests have JSON logs with request IDs, but capture-service warnings use the default logger without that ID. Manifest and frame contents are not logged. The stub's deduplication is in memory. Guarded re-drive, combined in-flight signal tests, and clean-clone verification remain untested. Optional gRPC, broker, S3, and OpenAPI extensions were cut.
